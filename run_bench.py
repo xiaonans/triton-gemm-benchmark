@@ -2,6 +2,7 @@ import torch
 from kernels.basic_matmul import matmul
 from kernels.autotune_config import is_hip_mi200, is_cuda
 import triton
+from kernels.quantize import quantize
 
 
 def benchmark(M, N, K):
@@ -17,6 +18,10 @@ def benchmark(M, N, K):
     else:
         print("❌ Triton and Torch differ")
 
+    print(b)
+    b = quantize(b, 8, dequantize=True)
+    print(b)
+
     ms_torch = triton.testing.do_bench(lambda: torch.matmul(a, b))
     ms_triton = triton.testing.do_bench(lambda: matmul(a, b))
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
@@ -25,4 +30,4 @@ def benchmark(M, N, K):
     
 
 
-benchmark(4096,4096,4096)
+benchmark(1,8,256)

@@ -9,12 +9,12 @@ def quantize(weight, bitwidth, groupsize=128, dequantize=False):
 
     assert K % groupsize == 0
 
-    weight = weight.view(groupsize, -1)
+    weight = weight.reshape(K//groupsize, groupsize, N).permute(1, 0, 2).reshape(groupsize, -1)
     num_groups = weight.shape[1]
     assert num_groups == N * (K // groupsize)
 
-    max_val = weight.amax(dim=-1, keepdim=True)
-    min_val = weight.amin(dim=-1, keepdim=True)
+    max_val = weight.amax(dim=0, keepdim=True)
+    min_val = weight.amin(dim=0, keepdim=True)
 
     assert max_val.numel() == num_groups
 
@@ -24,15 +24,18 @@ def quantize(weight, bitwidth, groupsize=128, dequantize=False):
     scales = (max_val - min_val).clamp(min=1e-5) / max_int
     zeros = (-torch.round(min_val/scales))
 
-    weight_quant = torch.clamp(torch.round(weight/scales) + zeros, min_int, max_int)
+    # import pdb;pdb.set_trace()
+    weight = torch.clamp(torch.round(weight/scales) + zeros, min_int, max_int)
 
     if dequantize:
         output = (weight - zeros) * scales
+        output = output.reshape(groupsize, -1, N).permute(1,0,2)
         return output.reshape(orig_shape).cuda()
 
     else:
         scales = scales.view(-1, N).cuda()
         zeros = zeros.view(-1, N).cuda()
+        weight = weight.reshape(groupsize, -1, N).permute(1,0,2)
         output = weight.to(torch.uint8()).reshape(orig_shape).cuda()
         return output, zeros, scales
 
