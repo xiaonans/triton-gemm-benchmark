@@ -3,7 +3,7 @@ from kernels.basic_matmul import matmul
 from kernels.autotune_config import is_hip_mi200, is_cuda
 import triton
 from kernels.quantize import quantize
-
+import flashnn
 
 def benchmark(M, N, K):
     a = torch.randn((M, K), device='cuda', dtype=torch.float16)
@@ -22,6 +22,10 @@ def benchmark(M, N, K):
     print(torch_output)
     torch_output = torch.matmul(a, b)
     print(torch_output)
+
+    q_weight, zeros, scales = quantize(b, 8)
+
+    print(flashnn.GemmWeightOnly()(a, q_weight, scales, None, zeros))
 
 
     ms_torch = triton.testing.do_bench(lambda: torch.matmul(a, b))

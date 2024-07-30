@@ -36,6 +36,6 @@ def quantize(weight, bitwidth, groupsize=128, dequantize=False):
         scales = scales.view(-1, N).cuda()
         zeros = zeros.view(-1, N).cuda()
         weight = weight.reshape(groupsize, -1, N).permute(1,0,2)
-        output = weight.to(torch.uint8()).reshape(orig_shape).cuda()
+        output = weight.to(torch.uint8).reshape(orig_shape).cuda()
         return output, zeros, scales
 
