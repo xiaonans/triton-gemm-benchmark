@@ -18,9 +18,11 @@ def benchmark(M, N, K):
     else:
         print("❌ Triton and Torch differ")
 
-    print(b)
     b = quantize(b, 8, dequantize=True)
-    print(b)
+    print(torch_output)
+    torch_output = torch.matmul(a, b)
+    print(torch_output)
+
 
     ms_torch = triton.testing.do_bench(lambda: torch.matmul(a, b))
     ms_triton = triton.testing.do_bench(lambda: matmul(a, b))
