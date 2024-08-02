@@ -16,6 +16,7 @@ from .autotune_config import get_autotune_config
 def matmul_kernel(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
+        scale, zero,
         # Matrix dimensions
         M, N, K,
         # The stride variables represent how much to increase the ptr by when moving by 1
@@ -64,7 +65,7 @@ def matmul_kernel(
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float16)
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
@@ -87,7 +88,7 @@ def matmul_kernel(
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, c, mask=c_mask)
 
-def matmul(a, b, activation=""):
+def matmul(a, b, scale, zero, activation=""):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.is_contiguous(), "Matrix A must be contiguous"
@@ -99,6 +100,7 @@ def matmul(a, b, activation=""):
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
     matmul_kernel[grid](
         a, b, c,  #
+        scale, zero, #
         M, N, K,  #
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
