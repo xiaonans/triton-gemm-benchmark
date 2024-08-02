@@ -64,7 +64,7 @@ def matmul_kernel(
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
     # of fp32 values for higher accuracy.
     # `accumulator` will be converted back to fp16 after the loop.
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float16)
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Load the next block of A and B, generate a mask by checking the K dimension.
         # If it is out of bounds, set it to 0.
@@ -77,6 +77,8 @@ def matmul_kernel(
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
     # while the accumulator is still in FP32!
+    if ACTIVATION == "leaky_relu":
+        accumulator = leaky_relu(accumulator)
     c = accumulator.to(tl.float16)
 
     # -----------------------------------------------------------
@@ -86,6 +88,13 @@ def matmul_kernel(
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, c, mask=c_mask)
+
+
+# We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `matmul_kernel`.
+@triton.jit
+def leaky_relu(x):
+    return tl.where(x >= 0, x, 0.01 * x)
+
 
 def matmul(a, b, activation=""):
     # Check constraints.
