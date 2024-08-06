@@ -16,7 +16,6 @@ from .autotune_config import get_autotune_config
 def matmul_kernel(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
-        scale, zero,
         # Matrix dimensions
         M, N, K,
         # The stride variables represent how much to increase the ptr by when moving by 1
@@ -78,6 +77,8 @@ def matmul_kernel(
         b_ptrs += BLOCK_SIZE_K * stride_bk
     # You can fuse arbitrary activation functions here
     # while the accumulator is still in FP32!
+    if ACTIVATION == "leaky_relu":
+        accumulator = leaky_relu(accumulator)
     c = accumulator.to(tl.float16)
 
     # -----------------------------------------------------------
@@ -88,7 +89,14 @@ def matmul_kernel(
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, c, mask=c_mask)
 
-def matmul(a, b, scale, zero, activation=""):
+
+# We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `matmul_kernel`.
+@triton.jit
+def leaky_relu(x):
+    return tl.where(x >= 0, x, 0.01 * x)
+
+
+def matmul(a, b, activation=""):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.is_contiguous(), "Matrix A must be contiguous"
@@ -100,7 +108,6 @@ def matmul(a, b, scale, zero, activation=""):
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
     matmul_kernel[grid](
         a, b, c,  #
-        scale, zero, #
         M, N, K,  #
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
