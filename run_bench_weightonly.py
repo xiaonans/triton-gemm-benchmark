@@ -1,7 +1,7 @@
 import torch
 import triton
 from kernels.weight_only_quant_matmul import matmul
-# import flashnn
+from kernels.quantize import quantize
 
 class bcolors:
     HEADER = '\033[95m'
@@ -18,8 +18,12 @@ def benchmark(M, N, K):
     a = torch.randn((M, K), device='cuda', dtype=torch.float16)
     b = torch.randn((K, N), device='cuda', dtype=torch.float16)
 
-    triton_output = matmul(a, b)
-    torch_output = torch.matmul(a, b)
+    b_quant, zero, scale = quantize(b, 8)
+    b_dequant = quantize(b, 8, dequantize=True)
+
+    b_quant = b_quant.to(torch.float16)
+    triton_output = matmul(a, b_quant, scale, zero)
+    torch_output = torch.matmul(a, b_dequant)
 
     try:
         torch.testing.assert_close(torch_output, triton_output, rtol=3e-2, atol=2e-3)
@@ -30,8 +34,8 @@ def benchmark(M, N, K):
         # print(triton_output)
 
 
-    ms_torch = triton.testing.do_bench(lambda: torch.matmul(a, b))
-    ms_triton = triton.testing.do_bench(lambda: matmul(a, b))
+    ms_torch = triton.testing.do_bench(lambda: torch.matmul(a, b_dequant))
+    ms_triton = triton.testing.do_bench(lambda: matmul(a, b_quant, scale, zero))
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     print(bcolors.WARNING + "torch:", "%.2f"%perf(ms_torch), "TFLOPS" + bcolors.ENDC)
     print(bcolors.WARNING + "triton:", "%.2f"%perf(ms_triton), "TFLOPS" + bcolors.ENDC)

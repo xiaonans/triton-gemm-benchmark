@@ -16,6 +16,7 @@ from .autotune_config import get_autotune_config
 def matmul_kernel(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
+        scales_ptr, zeros_ptr,
         # Matrix dimensions
         M, N, K,
         # The stride variables represent how much to increase the ptr by when moving by 1
@@ -24,6 +25,9 @@ def matmul_kernel(
         stride_am, stride_ak,  #
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,
+        stride_scales_g, stride_scales_n,
+        stride_zeros_g, stride_zeros_n,
+        groupsize,
         # Meta-parameters
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,  #
         GROUP_SIZE_M: tl.constexpr,  #
@@ -59,6 +63,9 @@ def matmul_kernel(
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
+    scales_ptrs = scales_ptr + offs_bn * stride_scales_n
+    zeros_ptrs = zeros_ptr + offs_bn * stride_zeros_n
+
     # -----------------------------------------------------------
     # Iterate to compute a block of the C matrix.
     # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
@@ -70,6 +77,15 @@ def matmul_kernel(
         # If it is out of bounds, set it to 0.
         a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
         b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+
+        # dequantization
+        g_id = k // (groupsize // BLOCK_SIZE_K)
+        ptr = scales_ptrs + g_id * stride_scales_g
+        scales = tl.load(ptr)
+        ptr = zeros_ptrs + g_id * stride_zeros_g
+        zeros = tl.load(ptr)
+        b = (b - zeros[None, :]) * scales[None, :]
+
         # We accumulate along the K dimension.
         accumulator = tl.dot(a, b, accumulator)
         # Advance the ptrs to the next K block.
@@ -96,22 +112,29 @@ def leaky_relu(x):
     return tl.where(x >= 0, x, 0.01 * x)
 
 
-def matmul(a, b, activation=""):
+def matmul(a, b, scales, zeros, activation=""):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.is_contiguous(), "Matrix A must be contiguous"
+    assert scales.shape[0] == zeros.shape[0], "Incompatible groupsize"
     M, K = a.shape
     K, N = b.shape
+    n_group, N = scales.shape
+    groupsize = K//n_group
     # Allocates output.
     c = torch.empty((M, N), device=a.device, dtype=torch.float16)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
     matmul_kernel[grid](
         a, b, c,  #
+        scales, zeros,
         M, N, K,  #
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
+        scales.stride(0), scales.stride(1), #
+        zeros.stride(0), zeros.stride(1), #
+        groupsize,
         ACTIVATION=activation  #
     )
     return c
